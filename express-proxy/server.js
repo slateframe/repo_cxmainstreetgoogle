@@ -13,23 +13,23 @@ const allowedOrigins = [
   'https://fluxity.io'
 ];
 
-// Selective CORS middleware - only apply to API routes
+// Selective CORS middleware - only apply to API routes from external origins
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const isApiRequest = req.path.startsWith('/api/') || 
                       req.path.startsWith('/webhook/') || 
                       req.path.startsWith('/rest/');
   
-  // Only apply CORS for API requests from external origins
-  if (isApiRequest && origin && allowedOrigins.includes(origin)) {
+  // Only apply CORS for API requests from external origins (not same-origin requests)
+  if (isApiRequest && origin && origin !== `https://${req.get('host')}` && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-N8N-API-KEY');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-N8N-API-KEY, Cookie');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
   
-  // Handle preflight requests for API endpoints
-  if (req.method === 'OPTIONS' && isApiRequest) {
+  // Handle preflight requests for external API endpoints only
+  if (req.method === 'OPTIONS' && isApiRequest && origin && allowedOrigins.includes(origin)) {
     return res.sendStatus(204);
   }
   
@@ -41,11 +41,30 @@ app.use(
   '/',
   createProxyMiddleware({
     target: 'http://127.0.0.1:5678',
-    changeOrigin: true,
+    changeOrigin: false, // Keep original host for same-origin requests
     ws: true, // support WebSocket for n8n UI
-    // Preserve host header for n8n
+    secure: true,
+    // Preserve authentication headers and cookies
     onProxyReq: (proxyReq, req, res) => {
+      // Forward all authentication headers
+      if (req.headers.authorization) {
+        proxyReq.setHeader('Authorization', req.headers.authorization);
+      }
+      if (req.headers.cookie) {
+        proxyReq.setHeader('Cookie', req.headers.cookie);
+      }
+      // Set the correct host header
       proxyReq.setHeader('Host', 'cxdemo.cxmainstreetservers.com');
+      proxyReq.setHeader('X-Forwarded-Proto', 'https');
+      proxyReq.setHeader('X-Forwarded-Host', 'cxdemo.cxmainstreetservers.com');
+    },
+    // Handle WebSocket upgrade properly
+    onError: (err, req, res) => {
+      console.error('Proxy error:', err);
+      res.writeHead(500, {
+        'Content-Type': 'text/plain'
+      });
+      res.end('Proxy error: ' + err.message);
     }
   })
 );
